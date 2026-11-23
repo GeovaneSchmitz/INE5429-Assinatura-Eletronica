@@ -1,0 +1,17 @@
+#!/usr/bin/ash
+# PID 1 da VM de instalação. O primeiro disco é novo, o segundo é somente leitura.
+set -e
+export PATH=/usr/bin
+trap 'sync; poweroff -f' EXIT
+. /init_functions
+mount_setup
+modprobe -a virtio_pci virtio_blk dm_crypt
+/usr/lib/systemd/systemd-udevd --daemon --resolve-names=never
+udevadm trigger --action=add
+udevadm settle
+cryptsetup isLuks --type luks2 /dev/vda
+echo "Desbloqueie o novo volume para copiar a raiz."
+cryptsetup open --type luks2 /dev/vda t4root
+dd if=/dev/vdb of=/dev/mapper/t4root bs=4M conv=fsync
+cryptsetup close t4root
+echo 'COPIA_OK' > /dev/ttyS1

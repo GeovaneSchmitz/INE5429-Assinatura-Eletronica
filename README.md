@@ -1,8 +1,8 @@
 # Assinatura digital e execução segura de código
 
-Simulação didática em Python do fluxo do relatório: raiz confiável → bootloader → chave do bootloader → kernel. As assinaturas usam RSA-PSS (3072 bits) e SHA-256, pela biblioteca `cryptography`.
+O simulador Python reproduz a cadeia de confiança do relatório com RSA-PSS (3072 bits) e SHA-256. A VM demonstra o fluxo com firmware UEFI, uma imagem EFI assinada e um Linux com a raiz cifrada por LUKS2.
 
-## Executar
+## Executar o simulador Python
 
 Requer Python 3.10 ou superior.
 
@@ -46,7 +46,49 @@ python3 -m unittest discover -s tests -v
 
 Os testes cobrem a cadeia válida, componentes adulterados, troca de chaves, assinaturas corrompidas, arquivos ausentes e bloqueio de execução.
 
-## Limites e próximos passos
+## VM Linux com Secure Boot e raiz LUKS2
+
+O firmware OVMF verifica a imagem EFI assinada antes de iniciar o kernel. A imagem reúne o kernel, o initramfs e os parâmetros de boot. O initramfs identifica o disco pelo UUID do LUKS, pede a senha no console serial e monta o ext4 desbloqueado como `/`. O login e os programas vêm do sistema instalado nesse ext4.
+
+### Criar uma VM
+
+No Arch Linux x86_64, as ferramentas usadas são dos pacotes abaixo. O provisionamento roda como usuário comum.
+
+```bash
+sudo pacman -S --needed qemu-system-x86 edk2-ovmf systemd-ukify sbsigntools virt-firmware mkinitcpio cryptsetup e2fsprogs cpio openssl python-pexpect
+```
+
+Use uma imagem raw de um sistema de arquivos ext4 **desmontado**, com o LFS já instalado, `/sbin/init` e login em `ttyS0`. Se partir de um disco particionado, use uma cópia da partição raiz. O UUID do ext4 é preservado, por isso a entrada de `/` no `fstab` pode usar o mesmo `UUID=...`. O volume LUKS receberá um UUID próprio.
+
+```bash
+mkdir -p ~/.local/share
+vm/luks create ./lfs-root.ext4 ~/.local/share/t4-lfs
+vm/luks boot ~/.local/share/t4-lfs
+```
+
+O destino deve ser novo. Na criação, escolha a senha LUKS, confirme-a e digite-a uma terceira vez na VM que copia o ext4. A imagem ext4 de origem continua em claro e é conectada somente para leitura. Em cada boot, a primeira senha desbloqueia o disco. Em seguida, use uma conta do próprio LFS para entrar. Para encerrar, execute `poweroff` dentro do convidado.
+
+O kernel padrão vem de `/usr/lib/modules/$(uname -r)/vmlinuz`. Para usar o kernel compilado pelo grupo, defina `KERNEL=/caminho/para/vmlinuz` ao criar a VM e instale os módulos correspondentes em `/usr/lib/modules/<versão>` no host de construção. O kernel precisa suportar EFI stub, initramfs, console serial, VirtIO, ext4 e dm-crypt com AES-XTS. `OVMF_CODE` e `OVMF_VARS` permitem indicar outro par compatível de firmware Secure Boot e modelo de variáveis vazio. Para a demonstração, o mesmo certificado é cadastrado em PK, KEK e db na cópia do modelo usada pela VM.
+
+### Verificar a demonstração
+
+Com a VM desligada, execute o teste de integração. Ele usa uma cópia temporária do disco e das variáveis do firmware e pede a senha LUKS pelo terminal.
+
+```bash
+python3 tests/luks_vm.py ~/.local/share/t4-lfs
+```
+
+| Cenário | Resultado esperado |
+| --- | --- |
+| Imagem EFI com a assinatura removida | OVMF recusa a execução antes do pedido de senha. |
+| Imagem assinada e senha LUKS incorreta | O volume continua fechado e o initramfs pede a senha novamente. |
+| Imagem assinada e senha correta | O LFS monta a raiz e chega ao login serial. |
+
+A VM de demonstração foi testada com a raiz pré-compilada do LFS 8.3, adaptada para console serial e para montar `/` pelo UUID do ext4, e com o kernel 7.3.4 do Arch Linux. Após o login, o convidado informou `SecureBoot=1` e `/dev/mapper/t4root ext4` para a raiz. [Origem da imagem de demonstração](https://github.com/EvilFreelancer/docker-lfs-build/releases/tag/8.3)
+
+Para inspecionar o disco no host, execute `cryptsetup luksDump ~/.local/share/t4-lfs/root.luks`. Dentro da VM, `awk '$2 == "/" {print $1, $3}' /proc/mounts` mostra a origem e o tipo da raiz. A imagem EFI fica na partição de boot legível pelo firmware. A chave privada de assinatura fica no diretório `private/` do host, fora dos discos apresentados à VM. O volume usa LUKS2 com Argon2id para proteger os dados em repouso. A assinatura cobre os componentes da imagem EFI. A integridade dos arquivos da raiz após o desbloqueio está fora dessa verificação.
+
+## Limites do simulador Python
 
 O bootloader é um componente simulado; o verificador Python realiza as etapas do fluxo, e o kernel é um programa Python demonstrativo. Isso não implementa firmware UEFI nem carrega um sistema operacional. O verificador, o interpretador e a chave raiz são pressupostos confiáveis. Trocar a raiz na linha de comando altera explicitamente a confiança da simulação.
 

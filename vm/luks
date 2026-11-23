@@ -1,0 +1,98 @@
+#!/usr/bin/env bash
+set -euo pipefail
+umask 077
+
+scripts=$(dirname "$(realpath "$0")")
+firmware=${OVMF_CODE:-/usr/share/edk2/x64/OVMF_CODE.secboot.4m.fd}
+template=${OVMF_VARS:-/usr/share/edk2/x64/OVMF_VARS.4m.fd}
+qemu=(qemu-system-x86_64 -machine q35,smm=on -smp 2 -m 2048 -nic none -display none)
+if [[ -r /dev/kvm && -w /dev/kvm ]]; then
+    qemu+=(-accel kvm -cpu host)
+else
+    qemu+=(-accel tcg -cpu max)
+fi
+
+fail() { echo "$*" >&2; exit 1; }
+
+create() (
+    local source destination kernel release work source_bytes owner disk_id
+    source=$(realpath -e -- "$1")
+    destination="$(realpath -e -- "$(dirname -- "$2")")/$(basename -- "$2")"
+    [[ -f $source && $(blkid -p -s TYPE -o value "$source") == ext4 ]] ||
+        fail "Informe a imagem raw de um sistema de arquivos ext4."
+    [[ ! -e $destination && ! -L $destination ]] || fail "O destino já existe."
+    [[ -t 0 ]] || fail "Execute a criação em um terminal para escolher e confirmar a senha."
+    [[ -r $firmware && -r $template ]] || fail "Informe o par OVMF_CODE e OVMF_VARS."
+    template=$(realpath -e -- "$template")
+    release=${KVER:-$(uname -r)}
+    kernel=${KERNEL:-/usr/lib/modules/$release/vmlinuz}
+    kernel=$(realpath -e -- "$kernel")
+    for tool in mkinitcpio ukify sbsign sbverify virt-fw-vars cryptsetup qemu-system-x86_64; do
+        command -v "$tool" >/dev/null || fail "Dependência ausente: $tool"
+    done
+    e2fsck -fn "$source" || fail "A raiz ext4 precisa estar íntegra e desmontada."
+    source_bytes=$(stat -Lc %s -- "$source")
+    (( source_bytes % 512 == 0 )) || fail "O tamanho da imagem precisa ser múltiplo de 512 bytes."
+    work=$(mktemp -d -- "$(dirname "$destination")/.t4-luks.XXXXXXXX")
+    trap 'rm -rf -- "$work"' EXIT
+    cd "$work"
+    mkdir -p esp/EFI/BOOT private build
+
+    # Criptografa somente um arquivo novo. O UUID vai na linha de comando assinada.
+    truncate -s "$((source_bytes + 16 * 1024 * 1024))" root.luks
+    echo "Escolha uma senha LUKS para o disco da VM."
+    cryptsetup luksFormat --type luks2 --batch-mode --verify-passphrase --offset 32768 --sector-size 512 \
+        --pbkdf argon2id --pbkdf-memory 262144 root.luks
+    disk_id=$(cryptsetup luksUUID root.luks)
+
+    mkinitcpio --nopost -c "$scripts/mkinitcpio.conf" -k "$kernel" -g build/initramfs
+    openssl req -new -x509 -newkey rsa:3072 -nodes -sha256 -days 3650 \
+        -subj '/CN=T4 Secure Boot/' -keyout private/db.key -out private/db.crt
+    owner=$(cat /proc/sys/kernel/random/uuid)
+    virt-fw-vars -i "$template" -o vars.fd --set-pk "$owner" private/db.crt \
+        --add-kek "$owner" private/db.crt --add-db "$owner" private/db.crt --secure-boot
+    ukify build --linux="$kernel" --initrd=build/initramfs \
+        --os-release=$'ID=t4\nNAME="T4 Secure Boot"' \
+        --cmdline="console=ttyS0,115200 loglevel=4 cryptdevice=UUID=$disk_id:t4root root=/dev/mapper/t4root rootfstype=ext4 rw" \
+        --output=build/boot.efi
+    sbsign --key private/db.key --cert private/db.crt \
+        --output esp/EFI/BOOT/BOOTX64.EFI build/boot.efi
+    sbverify --cert private/db.crt esp/EFI/BOOT/BOOTX64.EFI
+
+    # Somente a VM de cópia recebe este PID 1 e a imagem de origem.
+    install -m 755 "$scripts/copy-root" build/copy-root
+    (cd build && printf 'copy-root\n' | cpio --quiet -o -H newc --owner=0:0) > build/copy.cpio
+    cat build/initramfs build/copy.cpio > build/install.initrd
+    ln -s -- "$source" build/source.ext4
+    "${qemu[@]}" -no-reboot -serial stdio -monitor none -serial file:build/result \
+        -kernel "$kernel" -initrd build/install.initrd \
+        -append 'console=ttyS0,115200 rdinit=/copy-root quiet panic=1' \
+        -drive file=root.luks,format=raw,if=virtio \
+        -drive file=build/source.ext4,format=raw,if=virtio,readonly=on
+    [[ $(tr -d '\r\n' < build/result) == COPIA_OK ]] || fail "Falha ao copiar a raiz."
+    rm -rf build
+    cd /
+    mv -T --update=none-fail -- "$work" "$destination"
+    trap - EXIT
+    echo "VM pronta em $destination"
+)
+
+boot() {
+    firmware=$(realpath -e -- "$firmware")
+    cd -- "$1"
+    [[ -f root.luks && -f vars.fd && -f esp/EFI/BOOT/BOOTX64.EFI ]] ||
+        fail "Diretório de VM incompleto."
+    exec "${qemu[@]}" -serial mon:stdio \
+        -global driver=cfi.pflash01,property=secure,value=on \
+        -drive "if=pflash,unit=0,format=raw,readonly=on,file=${firmware//,/,,}" \
+        -drive if=pflash,unit=1,format=raw,file=vars.fd \
+        -drive file=fat:esp,format=raw,if=none,id=efi,readonly=on \
+        -device virtio-blk-pci,drive=efi,bootindex=1 \
+        -drive file=root.luks,format=raw,if=virtio
+}
+
+case "${1:-}" in
+    create) [[ $# == 3 ]] || fail "Uso: $0 create RAIZ.ext4 NOVO_DIRETORIO"; create "$2" "$3" ;;
+    boot)   [[ $# == 2 ]] || fail "Uso: $0 boot DIRETORIO"; boot "$2" ;;
+    *) fail "Uso: $0 create RAIZ.ext4 NOVO_DIRETORIO | boot DIRETORIO" ;;
+esac
