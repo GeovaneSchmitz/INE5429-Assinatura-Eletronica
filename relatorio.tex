@@ -25,7 +25,7 @@
 \renewcommand{\ABNTEXsectionfont}{\normalfont}
 \renewcommand{\ABNTEXsectionfontsize}{\normalsize}
 \setlength{\afterchapskip}{1.5em}
-\setlength{\aftersecskip}{1.5em}
+\setlength{\aftersecskip}{0.9em}
 \captionnamefont{\footnotesize}
 \captiontitlefont{\footnotesize}
 \makepagestyle{relatorio}
@@ -65,9 +65,10 @@
 
 \chapter{Introdução}
 
-Este relatório tem como objetivo apresentar o projeto de uma simulação de Secure Boot,
-explicar as técnicas de assinatura digital de código utilizadas e fornecer o
-embasamento teórico necessário para compreender seu funcionamento.
+Como decidir se um kernel pode executar quando alguém pode alterar os arquivos
+de inicialização? Essa decisão antecede as proteções do sistema operacional.
+Escolhemos o Secure Boot para observar cada verificação de assinatura no
+simulador e o momento em que o firmware autoriza a execução do Linux na VM.
 
 \section{Funções de hash criptográfico}
 
@@ -103,36 +104,56 @@ memória de somente leitura~\cite{nist}.
 
 \chapter{Assinatura Digital de Código}
 
-Este capítulo tem como finalidade explicar a assinatura digital no contexto de
-assinatura de código.
-
 \section{Processo de assinatura de executáveis}
 
-A assinatura de um executável segue os mesmos princípios criptográficos aplicados
-à assinatura de outros dados, como mensagens. No Secure Boot, esse mecanismo é
-utilizado para autenticar componentes de inicialização, como bootloaders de
-sistemas operacionais e drivers UEFI. No ensaio com UEFI, a assinatura é
-incorporada ao executável EFI~\cite{uefi}.
+Na VM, a assinatura integra o executável EFI que o firmware carrega~\cite{uefi}.
+No simulador, o signatário assina um manifesto com RSA-PSS. O esquema incorpora
+um valor aleatório (\textit{salt}), de modo que duas assinaturas válidas do
+mesmo manifesto podem diferir~\cite{rfc8017}.
 
 \section{Processo de verificação de assinaturas}
 
-A verificação utiliza o mesmo fluxo de uma assinatura digital comum, verificando
-se a assinatura corresponde ao código recebido. Além da validade criptográfica,
-a política de segurança deve determinar se a chave é confiável e está autorizada
-a assinar aquele componente. No Secure Boot, essa decisão considera as bases de
-assinaturas autorizadas e proibidas. Caso essas condições não sejam atendidas,
-a execução pode ser bloqueada~\cite{uefi}.
+A verificação confirma se a assinatura corresponde ao conteúdo recebido.
+O firmware também consulta as bases de confiança para decidir se o signatário
+tem autorização para assinar aquele componente~\cite{uefi}.
 
 \section{Gerenciamento e revogação de chaves}
 
-O gerenciamento de chaves envolve sua geração, armazenamento, distribuição e
-substituição, mantendo a chave privada protegida. No Secure Boot, o gerenciamento
-utiliza a chave de plataforma (Platform Key, PK), que estabelece o controle da
-plataforma, e as chaves KEK, que autorizam atualizações das bases de confiança.
-A base db contém certificados e hashes autorizados, enquanto a base dbx registra
-aqueles que devem ser rejeitados. Assim, componentes vulneráveis ou assinados com
-chaves comprometidas podem ser bloqueados por atualizações autenticadas dessas
-bases~\cite{uefi}.
+A chave de plataforma (PK) estabelece o controle da plataforma. As chaves KEK
+autorizam atualizações das bases de confiança. A base \texttt{db} contém
+certificados e hashes autorizados, e a \texttt{dbx} registra os proibidos. Uma
+atualização autenticada pode revogar uma imagem vulnerável ou um certificado
+cuja chave privada foi comprometida~\cite{uefi}.
+
+\section{O que muda quando o kernel é editado?}
+\label{sec:exemplo-kernel}
+
+O comando \texttt{init} gera um kernel Python de uma linha. Seu manifesto
+contém o registro assinado abaixo, exibido com quebras de linha para leitura.
+O simulador assina o JSON com as chaves ordenadas e sem espaços.
+
+{\footnotesize
+\begin{verbatim}
+{"role":"kernel",
+ "sha256":"d5886c53506d86cce7c863c82e15512116ff3fc6d20675c01b97d05e9645d79d",
+ "version":1}
+\end{verbatim}
+}
+
+No primeiro boot, o SHA-256 calculado sobre \texttt{kernel.py} coincide com
+o do registro e o kernel executa (código 0). Acrescentar a linha
+\texttt{\# alteração de teste} em UTF-8, com uma quebra de linha ao final,
+produz o resumo abaixo.
+
+{\footnotesize
+\begin{verbatim}
+dd50356750c1ab441904e51fdfeac1dd72d62406322983e31012217d7d133f28
+\end{verbatim}
+}
+
+A assinatura do manifesto continua válida porque seus campos permanecem
+idênticos. Ao comparar os dois resumos, o verificador identifica a alteração
+nos bytes do kernel e encerra o boot com código 1.
 
 \chapter{Simulação do Secure Boot}
 
@@ -160,7 +181,8 @@ entrega ao interpretador Python os mesmos bytes que acabaram de ser verificados.
 
 \section{Integridade do kernel no simulador}
 
-Os ensaios foram realizados em 23 de novembro de 2026, com a revisão
+As capturas das Figuras~\ref{fig:simulador} a~\ref{fig:linux} foram feitas
+em 23 de novembro de 2026, com a revisão
 \texttt{28b74b4} do projeto em um host Arch Linux x86-64. O simulador foi
 executado com Python 3.14.10 e \texttt{cryptography} 50.0.2. As capturas deste
 capítulo registram o terminal do host e o console serial da VM. Para isolar o
@@ -212,7 +234,13 @@ terminou antes do pedido de senha do disco.
   \includegraphics[width=\linewidth]{figuras/ensaio-firmware.png}
 \end{figure}
 
-Com a imagem assinada, o firmware iniciou o kernel e o \textit{initramfs}
+Na segunda VM usamos o arquivo \texttt{lfs83.bz2} e o kernel
+\texttt{7.3.5-arch1-1}. Assinamos a mesma imagem EFI com uma chave externa.
+O \texttt{sbverify} retornou \texttt{Signature verification OK} ao
+usar o respectivo certificado. Como a base \texttt{db} continuava com o
+certificado original, o OVMF recusou a imagem antes do pedido de senha.
+
+Com a imagem assinada pela chave autorizada, o firmware iniciou o kernel e o \textit{initramfs}
 solicitou a senha do volume \texttt{t4root}. Ao receber uma senha incorreta, o
 LUKS informou que nenhuma chave correspondia à senha e repetiu o pedido
 (Figura~\ref{fig:luks}). Esta etapa já pertence ao Linux.
@@ -242,26 +270,65 @@ atributos, retornou 1 (Figura~\ref{fig:linux}).
   \includegraphics[width=0.88\linewidth,trim=0 45bp 0 0,clip]{figuras/ensaio-linux.png}
 \end{figure}
 
-O teste de integração \texttt{tests/luks\_vm.py} repetiu os três cenários em
-uma cópia temporária do disco e das variáveis do firmware. A variável de shell
-\texttt{VM} na Figura~\ref{fig:testes} aponta para o diretório da VM de ensaio.
+Na VM reproduzida com \texttt{vm/luks prepare-lfs} e \texttt{vm/luks create},
+entramos como \texttt{ensaio} e repetimos os comandos da Figura~\ref{fig:linux}.
+A montagem da raiz e o estado do Secure Boot coincidiram com os do primeiro ensaio.
+O teste \texttt{tests/luks\_vm.py} exercitou os quatro cenários com uma cópia
+das variáveis originais do firmware a cada boot. A Figura~\ref{fig:testes}
+reproduz as linhas de resultado emitidas pelo teste e pelo \texttt{sbverify}.
 
 \begin{figure}[H]
   \centering
-  \caption{Resultado dos testes unitários e dos três cenários de integração}
+  \caption{Saída do teste de integração na VM com LFS 8.3}
   \label{fig:testes}
-  \includegraphics[width=0.93\linewidth,trim=0 45bp 0 0,clip]{figuras/ensaio-testes.png}
+  \begin{minipage}{0.96\linewidth}
+  \footnotesize
+\begin{verbatim}
+OK: o firmware recusou a imagem sem assinatura.
+Signature verification OK
+OK: o firmware recusou a imagem assinada por certificado externo.
+OK: o LUKS recusou a senha incorreta.
+OK: a imagem assinada chegou ao login com a senha correta.
+\end{verbatim}
+  \end{minipage}
 \end{figure}
 
 \section{Conclusão}
 
 O comentário acrescentado ao kernel bastou para interromper a cadeia simulada.
-Na VM, a retirada da assinatura interrompeu o boot no OVMF, enquanto a senha
-incorreta o interrompeu depois, durante a abertura do disco. Com a imagem
+Na VM, o OVMF recusou tanto a imagem sem assinatura quanto a assinada por uma
+chave externa à base de confiança. A senha incorreta manteve o volume LUKS
+fechado depois que o \textit{initramfs} já estava em execução. Com a imagem
 assinada e a senha correta, o Linux montou a raiz cifrada e abriu uma sessão de
 usuário. A assinatura verificada abrange a imagem EFI. A integridade individual
 dos arquivos do ext4 e a revogação de chaves ficam fora destes ensaios.
 
 \postextual
+\nocite{assistente-ia}
 \bibliography{referencias}
+
+\section*{Declaração de uso de inteligência artificial}
+
+\noindent\textbf{Simulador.} Utilizamos IA para implementar o simulador em Python
+(\texttt{secure\_boot.py}). O programa gera os manifestos assinados com RSA-PSS
+e verifica a cadeia de confiança da chave raiz até o kernel.
+
+\smallskip
+\noindent\textbf{Redação e documentação.} Em 23 de novembro de 2026, usamos um
+assistente de programação da OpenAI para revisar o projeto à luz do enunciado.
+A ferramenta revisou a introdução, calculou os hashes do kernel para o exemplo
+que redigiu na seção~\ref{sec:exemplo-kernel} e escreveu o roteiro da VM no README.
+
+\smallskip
+\noindent\textbf{Código da VM.} O assistente implementou o comando
+\texttt{vm/luks prepare-lfs}, que prepara a raiz ext4 e cria a conta de ensaio.
+Acrescentou ao teste de integração o caso da imagem EFI assinada com uma chave
+externa à base de confiança do firmware.
+
+\smallskip
+\noindent\textbf{Ensaios.} O assistente executou os 11 testes unitários existentes e
+os quatro cenários de integração em uma VM criada a partir da imagem publicada
+do LFS 8.3. A Figura~\ref{fig:testes} transcreve a saída dessa execução. Após
+o login, a ferramenta também conferiu a montagem da raiz e leu o valor da
+variável EFI \texttt{SecureBoot}.
 \end{document}

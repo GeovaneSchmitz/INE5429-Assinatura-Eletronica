@@ -2,6 +2,7 @@ __pycache__/
 *.py[cod]
 .venv/
 demo/
+.t4-lfs.*/
 .t4-luks.*/
 .t4-teste-*/
 *.ext4

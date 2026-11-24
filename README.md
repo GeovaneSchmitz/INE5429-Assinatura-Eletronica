@@ -19,14 +19,17 @@ python secure_boot.py boot demo/image --root-key demo/trust/root.pem --execute
 
 ## Demonstrar adulteração
 
-Depois de executar o caso válido:
+Na imagem recém-gerada, inspecione o registro assinado e compare seu campo `sha256` com o resumo dos bytes do kernel. Acrescente o mesmo comentário em UTF-8 usado no relatório e repita a verificação.
 
 ```bash
-printf '\n# alteração não assinada\n' >> demo/image/kernel.py
+python3 -c 'import json; print(json.load(open("demo/image/kernel.sig.json"))["record"])'
+sha256sum demo/image/kernel.py
+printf '# alteração de teste\n' >> demo/image/kernel.py
+sha256sum demo/image/kernel.py
 python secure_boot.py boot demo/image --root-key demo/trust/root.pem --execute
 ```
 
-Resultado esperado: `BOOT BLOQUEADO: Kernel adulterado`; o kernel não é executado. Gere outra demonstração em um novo diretório para restaurar o cenário válido.
+O resumo original começa com `d5886c53` e o do arquivo editado com `dd503567`. A assinatura do manifesto continua válida. Como o segundo resumo difere do registrado, o verificador responde `BOOT BLOQUEADO: Kernel adulterado` e retorna 1. Use um diretório novo para repetir o exemplo.
 
 ## Cadeia de confiança
 
@@ -55,18 +58,28 @@ O firmware OVMF verifica a imagem EFI assinada antes de iniciar o kernel. A imag
 No Arch Linux x86_64, as ferramentas usadas são dos pacotes abaixo. O provisionamento roda como usuário comum.
 
 ```bash
-sudo pacman -S --needed qemu-system-x86 edk2-ovmf systemd-ukify sbsigntools virt-firmware mkinitcpio cryptsetup e2fsprogs cpio openssl python-pexpect
+sudo pacman -S --needed qemu-system-x86 edk2-ovmf systemd-ukify sbsigntools virt-firmware mkinitcpio cryptsetup e2fsprogs cpio openssl python-pexpect curl bzip2
 ```
 
-Use uma imagem raw de um sistema de arquivos ext4 **desmontado**, com o LFS já instalado, `/sbin/init` e login em `ttyS0`. Se partir de um disco particionado, use uma cópia da partição raiz. O UUID do ext4 é preservado, por isso a entrada de `/` no `fstab` pode usar o mesmo `UUID=...`. O volume LUKS receberá um UUID próprio.
+Para reproduzir o ensaio, execute os comandos a partir da raiz deste repositório e no mesmo terminal. O arquivo `lfs83.bz2` contém um sistema de arquivos ext4. O comando `prepare-lfs` confere o SHA-256 do download, descompacta uma cópia e recupera o journal com `e2fsck`. [Release do LFS 8.3 usada no ensaio](https://github.com/EvilFreelancer/docker-lfs-build/releases/tag/8.3)
 
 ```bash
 mkdir -p ~/.local/share
-vm/luks create ./lfs-root.ext4 ~/.local/share/t4-lfs
-vm/luks boot ~/.local/share/t4-lfs
+lab=$(mktemp -d ~/.local/share/t4-lab.XXXXXXXX)
+curl -fL --output "$lab/lfs83.bz2" \
+    https://github.com/EvilFreelancer/docker-lfs-build/releases/download/8.3/lfs83.bz2
+vm/luks prepare-lfs "$lab/lfs83.bz2" "$lab/lfs-root.ext4"
+vm/luks create "$lab/lfs-root.ext4" "$lab/vm"
+vm/luks boot "$lab/vm"
 ```
 
-O destino deve ser novo. Na criação, escolha a senha LUKS, confirme-a e digite-a uma terceira vez na VM que copia o ext4. A imagem ext4 de origem continua em claro e é conectada somente para leitura. Em cada boot, a primeira senha desbloqueia o disco. Em seguida, use uma conta do próprio LFS para entrar. Para encerrar, execute `poweroff` dentro do convidado.
+Durante o preparo, escolha a senha de login de `ensaio`. O instalador inicia uma VM com a cópia ext4, configura a montagem de `/` pelo UUID no `/etc/fstab`, remove a entrada de swap de exemplo e cria a conta. Ao final, desmonta o ext4 e verifica o sistema de arquivos. No boot normal, a imagem EFI fornece `console=ttyS0,115200`. O SysVinit desta versão do LFS lê esse parâmetro e abre o login serial automaticamente. [Rotina de preparo no convidado](vm/prepare-root)
+
+Durante o `create`, escolha a senha LUKS, confirme-a e digite-a uma terceira vez para copiar os dados. A imagem ext4 preparada continua em claro e é conectada somente para leitura nessa cópia. No `boot`, a primeira senha desbloqueia o disco. No prompt `login:`, entre como `ensaio` com a senha definida no preparo.
+
+Para encerrar a demonstração com essa conta, pressione `Ctrl+a` e depois `c` para abrir o monitor QEMU. Digite `sendkey ctrl-alt-delete` e volte ao console com `Ctrl+a`, `c`. O LFS desmonta a raiz e reinicia. Quando aparecer o novo pedido da senha LUKS, pressione `Ctrl+a`, `x` para fechar o QEMU com o volume já bloqueado.
+
+Quem já possui uma imagem raw ext4 desmontada com `/sbin/init`, login em `ttyS0` e a raiz configurada no `fstab` pode passá-la diretamente a `vm/luks create`. O provisionamento preserva o UUID do ext4 e gera outro UUID para o volume LUKS.
 
 O kernel padrão vem de `/usr/lib/modules/$(uname -r)/vmlinuz`. Para usar o kernel compilado pelo grupo, defina `KERNEL=/caminho/para/vmlinuz` ao criar a VM e instale os módulos correspondentes em `/usr/lib/modules/<versão>` no host de construção. O kernel precisa suportar EFI stub, initramfs, console serial, VirtIO, ext4 e dm-crypt com AES-XTS. `OVMF_CODE` e `OVMF_VARS` permitem indicar outro par compatível de firmware Secure Boot e modelo de variáveis vazio. Para a demonstração, o mesmo certificado é cadastrado em PK, KEK e db na cópia do modelo usada pela VM.
 
@@ -75,18 +88,27 @@ O kernel padrão vem de `/usr/lib/modules/$(uname -r)/vmlinuz`. Para usar o kern
 Com a VM desligada, execute o teste de integração. Ele usa uma cópia temporária do disco e das variáveis do firmware e pede a senha LUKS pelo terminal.
 
 ```bash
-python3 tests/luks_vm.py ~/.local/share/t4-lfs
+/usr/bin/python3 tests/luks_vm.py "$lab/vm"
 ```
 
 | Cenário | Resultado esperado |
 | --- | --- |
 | Imagem EFI com a assinatura removida | OVMF recusa a execução antes do pedido de senha. |
+| Mesma imagem EFI assinada com um certificado de teste ausente da base `db` | `sbverify` confirma a assinatura com o certificado externo. O OVMF recusa a imagem antes do pedido de senha. |
 | Imagem assinada e senha LUKS incorreta | O volume continua fechado e o initramfs pede a senha novamente. |
 | Imagem assinada e senha correta | O LFS monta a raiz e chega ao login serial. |
 
-A VM de demonstração foi testada com a raiz pré-compilada do LFS 8.3, adaptada para console serial e para montar `/` pelo UUID do ext4, e com o kernel 7.3.4 do Arch Linux. Após o login, o convidado informou `SecureBoot=1` e `/dev/mapper/t4root ext4` para a raiz. [Origem da imagem de demonstração](https://github.com/EvilFreelancer/docker-lfs-build/releases/tag/8.3)
+A primeira VM de demonstração usou o kernel Arch `7.3.4-arch1-2`. As figuras do relatório de 23/11/2026 e a reprodução dos quatro cenários usam `7.3.5-arch1-1`, com LFS 8.3 e QEMU 11.1.3. No teste, cada inicialização parte de uma nova cópia das variáveis originais do firmware. A chave externa é criada em diretório temporário, fora da partição EFI.
 
-Para inspecionar o disco no host, execute `cryptsetup luksDump ~/.local/share/t4-lfs/root.luks`. Dentro da VM, `awk '$2 == "/" {print $1, $3}' /proc/mounts` mostra a origem e o tipo da raiz. A imagem EFI fica na partição de boot legível pelo firmware. A chave privada de assinatura fica no diretório `private/` do host, fora dos discos apresentados à VM. O volume usa LUKS2 com Argon2id para proteger os dados em repouso. A assinatura cobre os componentes da imagem EFI. A integridade dos arquivos da raiz após o desbloqueio está fora dessa verificação.
+No host, execute `cryptsetup luksDump "$lab/vm/root.luks"` para inspecionar o volume LUKS2. No convidado, os comandos abaixo mostram o kernel, o dispositivo montado como raiz e o byte de estado do Secure Boot, após os quatro bytes de atributos da variável EFI.
+
+```bash
+uname -r
+awk '$2 == "/" {print $1, $3}' /proc/mounts
+od -An -j4 -N1 -tu1 /sys/firmware/efi/efivars/SecureBoot-*
+```
+
+O resultado esperado no ensaio é `/dev/mapper/t4root ext4` para a raiz e `1` para Secure Boot. A chave privada de assinatura fica no diretório `private/` do host. O LUKS2 usa Argon2id na derivação de chave. A assinatura cobre os componentes da imagem EFI. A integridade dos arquivos do ext4 após o desbloqueio está fora dessa verificação.
 
 ## Limites do simulador Python
 

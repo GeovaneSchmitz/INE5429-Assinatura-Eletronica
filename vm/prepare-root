@@ -1,0 +1,29 @@
+#!/usr/bin/ash
+# PID 1 da VM de preparo. Seu único disco é a cópia de trabalho da release 8.3.
+set -e
+export PATH=/usr/bin:/usr/sbin:/bin:/sbin
+trap 'sync; poweroff -f' EXIT
+. /init_functions
+mount_setup
+modprobe -a virtio_pci virtio_blk ext4
+/usr/lib/systemd/systemd-udevd --daemon --resolve-names=never
+udevadm trigger --action=add
+udevadm settle
+mkdir -p /mnt
+mount -t ext4 /dev/vda /mnt
+mount -o bind /dev /mnt/dev
+mount -o bind /proc /mnt/proc
+
+uuid=$(chroot /mnt blkid -s UUID -o value /dev/vda)
+test -n "$uuid"
+sed -i -e "s|^/dev/<xxx>.*|UUID=$uuid / ext4 defaults 1 1|" \
+    -e '\|^/dev/<yyy>|d' /mnt/etc/fstab
+# O SysVinit desta imagem já cria o getty para console=ttyS0.
+chroot /mnt useradd -m -U -s /bin/bash ensaio
+echo "Defina a senha de login da conta ensaio no LFS."
+chroot /mnt passwd ensaio
+
+umount /mnt/proc
+umount /mnt/dev
+umount /mnt
+echo 'PREPARO_OK' > /dev/ttyS1

@@ -14,6 +14,45 @@ fi
 
 fail() { echo "$*" >&2; exit 1; }
 
+run_installer() {
+    local entry=$1 kernel=$2
+    shift 2
+    install -m 755 "$scripts/$entry" build/installer
+    cp build/initramfs build/install.initrd
+    # O cabeçalho newc que segue o initramfs comprimido começa em múltiplo de 4.
+    truncate -s %4 build/install.initrd
+    (cd build && printf 'installer\n' | cpio --quiet -o -H newc --owner=0:0) >> build/install.initrd
+    "${qemu[@]}" -no-reboot -serial stdio -monitor none -serial file:build/result \
+        -kernel "$kernel" -initrd build/install.initrd \
+        -append 'console=ttyS0,115200 rdinit=/installer quiet panic=1' "$@"
+}
+
+prepare_lfs() (
+    local source destination work kernel checksum status
+    source=$(realpath -e -- "$1")
+    destination="$(realpath -e -- "$(dirname -- "$2")")/$(basename -- "$2")"
+    [[ ! -e $destination && ! -L $destination ]] || fail "O destino já existe."
+    [[ -t 0 ]] || fail "Execute o preparo em um terminal para definir a senha da conta ensaio."
+    checksum=$(sha256sum < "$source")
+    [[ ${checksum%% *} == d5d30d613c0ebbff363a7a4a49325d8c463d1f3c6416d142990d93c59d034568 ]] ||
+        fail "O arquivo difere do lfs83.bz2 da versão 8.3 usada no ensaio."
+    kernel=$(realpath -e -- "${KERNEL:-/usr/lib/modules/${KVER:-$(uname -r)}/vmlinuz}")
+    work=$(mktemp -d -- "$(dirname "$destination")/.t4-lfs.XXXXXXXX")
+    trap 'rm -rf -- "$work"' EXIT
+    cd "$work"
+    mkdir build
+    bzip2 -dc -- "$source" > root.ext4
+    status=0
+    e2fsck -fp root.ext4 || status=$?
+    (( status <= 1 )) || fail "Falha ao recuperar o journal do ext4."
+    mkinitcpio --nopost -c "$scripts/mkinitcpio.conf" -k "$kernel" -g build/initramfs
+    run_installer prepare-root "$kernel" -drive file=root.ext4,format=raw,if=virtio
+    [[ $(tr -d '\r\n' < build/result) == PREPARO_OK ]] || fail "Falha ao preparar o LFS."
+    e2fsck -fn root.ext4
+    mv -T --update=none-fail -- root.ext4 "$destination"
+    echo "Raiz ext4 pronta em $destination"
+)
+
 create() (
     local source destination kernel release work source_bytes owner disk_id
     source=$(realpath -e -- "$1")
@@ -59,14 +98,8 @@ create() (
         --output esp/EFI/BOOT/BOOTX64.EFI build/boot.efi
     sbverify --cert private/db.crt esp/EFI/BOOT/BOOTX64.EFI
 
-    # Somente a VM de cópia recebe este PID 1 e a imagem de origem.
-    install -m 755 "$scripts/copy-root" build/copy-root
-    (cd build && printf 'copy-root\n' | cpio --quiet -o -H newc --owner=0:0) > build/copy.cpio
-    cat build/initramfs build/copy.cpio > build/install.initrd
     ln -s -- "$source" build/source.ext4
-    "${qemu[@]}" -no-reboot -serial stdio -monitor none -serial file:build/result \
-        -kernel "$kernel" -initrd build/install.initrd \
-        -append 'console=ttyS0,115200 rdinit=/copy-root quiet panic=1' \
+    run_installer copy-root "$kernel" \
         -drive file=root.luks,format=raw,if=virtio \
         -drive file=build/source.ext4,format=raw,if=virtio,readonly=on
     [[ $(tr -d '\r\n' < build/result) == COPIA_OK ]] || fail "Falha ao copiar a raiz."
@@ -92,7 +125,8 @@ boot() {
 }
 
 case "${1:-}" in
+    prepare-lfs) [[ $# == 3 ]] || fail "Uso: $0 prepare-lfs lfs83.bz2 NOVA_RAIZ.ext4"; prepare_lfs "$2" "$3" ;;
     create) [[ $# == 3 ]] || fail "Uso: $0 create RAIZ.ext4 NOVO_DIRETORIO"; create "$2" "$3" ;;
     boot)   [[ $# == 2 ]] || fail "Uso: $0 boot DIRETORIO"; boot "$2" ;;
-    *) fail "Uso: $0 create RAIZ.ext4 NOVO_DIRETORIO | boot DIRETORIO" ;;
+    *) fail "Uso: $0 prepare-lfs lfs83.bz2 NOVA_RAIZ.ext4 | create RAIZ.ext4 NOVO_DIRETORIO | boot DIRETORIO" ;;
 esac
