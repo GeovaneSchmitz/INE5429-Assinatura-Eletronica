@@ -1,0 +1,267 @@
+% A partir da raiz do projeto: latexmk -pdf relatorio.tex
+\PassOptionsToPackage{hypertexnames=false}{hyperref}
+\documentclass[12pt,a4paper,oneside,openany,brazil,chapter=TITLE,section=TITLE]{abntex2}
+
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{mathptmx}
+\usepackage{indentfirst}
+\usepackage{float}
+\usepackage{microtype}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta}
+\usepackage[alf,abnt-emphasize=bf,
+  abnt-full-initials=yes,abnt-url-package=url]{abntex2cite}
+\newcommand{\urlBibliografia}[1]{\href{#1}{#1}}
+\AddToHook{cmd/thebibliography/after}{\let\url\urlBibliografia}
+
+\setheadfoot{2cm}{1cm}
+\setlength{\headsep}{1cm}
+\checkandfixthelayout
+\setlength{\parindent}{1.5cm}
+\setlength{\parskip}{0pt}
+\renewcommand{\ABNTEXchapterfont}{\bfseries}
+\renewcommand{\ABNTEXchapterfontsize}{\normalsize}
+\renewcommand{\ABNTEXsectionfont}{\normalfont}
+\renewcommand{\ABNTEXsectionfontsize}{\normalsize}
+\setlength{\afterchapskip}{1.5em}
+\setlength{\aftersecskip}{1.5em}
+\captionnamefont{\footnotesize}
+\captiontitlefont{\footnotesize}
+\makepagestyle{relatorio}
+\makeoddhead{relatorio}{}{}{\footnotesize\thepage}
+
+\titulo{Assinatura Digital e Execução Segura de Código}
+\autor{Geovane Martins Schmitz\texorpdfstring{\\}{, }
+  Otávio Augusto de Santana Jatobá\texorpdfstring{\\}{, }
+  Vinicius Becker de Souza}
+\local{Florianópolis}
+\data{2026}
+\hypersetup{hidelinks,pdftitle={\imprimirtitulo},pdfauthor={\imprimirautor}}
+
+\begin{document}
+\citeoption{autor-data}
+\renewcommand{\bibname}{Referências Bibliográficas}
+\pretextual
+\begin{capa}
+  \begin{center}
+    UNIVERSIDADE FEDERAL DE SANTA CATARINA\par
+    CENTRO TECNOLÓGICO\par
+    DEPARTAMENTO DE INFORMÁTICA E ESTATÍSTICA\par
+    CIÊNCIA DA COMPUTAÇÃO\par
+    \vspace*{4cm}
+    \imprimirautor\par
+    \vspace*{5cm}
+    \textbf{\imprimirtitulo}\par
+    \vfill
+    \imprimirlocal\par
+    \imprimirdata\par
+    \vspace*{1cm}
+  \end{center}
+\end{capa}
+\setcounter{page}{1}
+\textual
+\pagestyle{relatorio}
+
+\chapter{Introdução}
+
+Este relatório tem como objetivo apresentar o projeto de uma simulação de Secure Boot,
+explicar as técnicas de assinatura digital de código utilizadas e fornecer o
+embasamento teórico necessário para compreender seu funcionamento.
+
+\section{Funções de hash criptográfico}
+
+Uma função de hash criptográfico transforma uma entrada de tamanho variável em um
+resumo de tamanho fixo. Entre seus requisitos de segurança estão a resistência à
+pré-imagem, à segunda pré-imagem e a colisões, tornando computacionalmente inviável
+recuperar uma entrada a partir de seu resumo ou encontrar entradas distintas com o
+mesmo resultado~\cite{stallings,stinson}. Este projeto utiliza a
+função SHA-256.
+
+\section{Assinaturas digitais}
+
+As assinaturas digitais permitem verificar a integridade de uma mensagem e
+associá-la ao detentor de uma chave privada. Na assinatura de código, o
+signatário utiliza a chave privada e o resumo criptográfico do conteúdo.
+O verificador utiliza a chave pública correspondente~\cite{stallings}.
+
+\begin{figure}[H]
+  \centering
+  \caption{Criação de uma assinatura digital}
+  \includegraphics[width=0.38\linewidth]{figuras/assinatura-digital.png}
+  \fonte{\citeonline{uefi}, \href{https://uefi.org/specs/UEFI/2.11/32_Secure_Boot_and_Driver_Signing.html\#creating-a-digital-signature}{\textit{Creating a Digital Signature}}.}
+\end{figure}
+
+\section{Raiz de confiança (Root of Trust)}
+
+A raiz de confiança é o conjunto mínimo de componentes e informações cuja
+confiabilidade constitui o ponto de partida da inicialização segura. Ela fornece
+o código inicial de verificação e as referências criptográficas necessárias para
+autenticar os componentes seguintes~\cite{zimmer}. Em uma implementação real de
+Secure Boot, essa base pode incluir código protegido em hardware, como uma
+memória de somente leitura~\cite{nist}.
+
+\chapter{Assinatura Digital de Código}
+
+Este capítulo tem como finalidade explicar a assinatura digital no contexto de
+assinatura de código.
+
+\section{Processo de assinatura de executáveis}
+
+A assinatura de um executável segue os mesmos princípios criptográficos aplicados
+à assinatura de outros dados, como mensagens. No Secure Boot, esse mecanismo é
+utilizado para autenticar componentes de inicialização, como bootloaders de
+sistemas operacionais e drivers UEFI. No ensaio com UEFI, a assinatura é
+incorporada ao executável EFI~\cite{uefi}.
+
+\section{Processo de verificação de assinaturas}
+
+A verificação utiliza o mesmo fluxo de uma assinatura digital comum, verificando
+se a assinatura corresponde ao código recebido. Além da validade criptográfica,
+a política de segurança deve determinar se a chave é confiável e está autorizada
+a assinar aquele componente. No Secure Boot, essa decisão considera as bases de
+assinaturas autorizadas e proibidas. Caso essas condições não sejam atendidas,
+a execução pode ser bloqueada~\cite{uefi}.
+
+\section{Gerenciamento e revogação de chaves}
+
+O gerenciamento de chaves envolve sua geração, armazenamento, distribuição e
+substituição, mantendo a chave privada protegida. No Secure Boot, o gerenciamento
+utiliza a chave de plataforma (Platform Key, PK), que estabelece o controle da
+plataforma, e as chaves KEK, que autorizam atualizações das bases de confiança.
+A base db contém certificados e hashes autorizados, enquanto a base dbx registra
+aqueles que devem ser rejeitados. Assim, componentes vulneráveis ou assinados com
+chaves comprometidas podem ser bloqueados por atualizações autenticadas dessas
+bases~\cite{uefi}.
+
+\chapter{Simulação do Secure Boot}
+
+O simulador \texttt{secure\_boot.py} recebe a imagem de inicialização e uma chave
+pública raiz fornecida separadamente. O comando \texttt{init} cria dois pares de
+chaves RSA de 3072 bits e dois manifestos assinados com RSA-PSS e SHA-256.
+O primeiro manifesto contém o resumo do bootloader e o da chave pública
+autorizada a verificar o kernel. O segundo contém o resumo do kernel. Cada
+assinatura cobre também a versão e o papel do componente no manifesto.
+
+\begin{figure}[H]
+  \centering
+  \caption{Decisões do verificador durante a inicialização simulada}
+  \label{fig:fluxo}
+  \input{figuras/fluxo-secure-boot.tex}
+\end{figure}
+
+Na Figura~\ref{fig:fluxo}, a primeira decisão depende da assinatura do manifesto
+e do resumo calculado sobre o bootloader recebido. A segunda depende da chave
+autorizada, da assinatura do manifesto do kernel e da correspondência entre o
+resumo registrado e o calculado. Com a opção \texttt{-{}-execute}, o simulador
+entrega ao interpretador Python os mesmos bytes que acabaram de ser verificados.
+
+\chapter{Execução e resultados}
+
+\section{Integridade do kernel no simulador}
+
+Os ensaios foram realizados em 23 de novembro de 2026, com a revisão
+\texttt{28b74b4} do projeto em um host Arch Linux x86-64. O simulador foi
+executado com Python 3.14.10 e \texttt{cryptography} 50.0.2. As capturas deste
+capítulo registram o terminal do host e o console serial da VM. Para isolar o
+efeito de uma alteração no kernel, mantivemos a mesma chave raiz, o mesmo
+bootloader e os mesmos manifestos nas duas execuções.
+
+\begin{figure}[H]
+  \centering
+  \caption{Execução da imagem original e repetição após a alteração do kernel}
+  \label{fig:simulador}
+  \includegraphics[width=\linewidth]{figuras/ensaio-simulador.png}
+\end{figure}
+
+Na primeira execução, o verificador autenticou o bootloader, a chave delegada e
+o kernel. A mensagem emitida pelo próprio kernel e o código de saída 0
+confirmaram a execução. Em seguida, acrescentamos um comentário ao arquivo
+\texttt{kernel.py}. Embora o comentário preserve o comportamento do programa,
+ele altera os bytes e, portanto, o resumo SHA-256. Na segunda execução, o
+verificador registrou \texttt{Kernel adulterado} e devolveu o código 1.
+A Figura~\ref{fig:simulador} mostra as duas chamadas com os mesmos argumentos.
+
+Os 11 testes de \texttt{tests/test\_secure\_boot.py} passaram. A suíte exercitou,
+entre outros casos, a troca da chave do bootloader, o uso de uma raiz incorreta,
+assinaturas inválidas e arquivos ausentes. Um teste confirmou que o verificador
+não iniciava o processo do kernel após uma falha. Outro comparou os bytes
+enviados ao processo com os bytes verificados.
+
+\clearpage
+\section{Inicialização da máquina virtual}
+
+A segunda parte do experimento usou QEMU 11.1.3, firmware OVMF e uma instalação
+temporária do Linux From Scratch (LFS) 8.3~\cite{imagem-lfs}. O script
+\texttt{vm/luks} provisionou uma máquina com duas CPUs virtuais, 2~GiB de RAM
+e um disco raiz LUKS2. A imagem EFI assinada reunia o kernel Linux, o
+\textit{initramfs} e os parâmetros de inicialização. O comando \texttt{sbverify}
+confirmou sua assinatura com o certificado de teste. A inspeção do cabeçalho
+com \texttt{cryptsetup luksDump} identificou AES-XTS e Argon2id.
+
+Para testar a decisão do firmware, removemos a assinatura com \texttt{sbattach}
+em uma cópia da imagem EFI. As variáveis de confiança do OVMF vieram da mesma
+VM. O firmware tentou carregar o dispositivo, informou \texttt{Access Denied}
+e esgotou as opções de inicialização (Figura~\ref{fig:firmware}). O fluxo
+terminou antes do pedido de senha do disco.
+
+\begin{figure}[H]
+  \centering
+  \caption{Recusa da imagem EFI sem assinatura pelo OVMF}
+  \label{fig:firmware}
+  \includegraphics[width=\linewidth]{figuras/ensaio-firmware.png}
+\end{figure}
+
+Com a imagem assinada, o firmware iniciou o kernel e o \textit{initramfs}
+solicitou a senha do volume \texttt{t4root}. Ao receber uma senha incorreta, o
+LUKS informou que nenhuma chave correspondia à senha e repetiu o pedido
+(Figura~\ref{fig:luks}). Esta etapa já pertence ao Linux.
+
+\begin{figure}[H]
+  \centering
+  \caption{Inicialização da imagem assinada e recusa da primeira senha pelo LUKS}
+  \label{fig:luks}
+  \includegraphics[width=\linewidth]{figuras/ensaio-luks.png}
+\end{figure}
+
+\clearpage
+\section{Verificação no Linux inicializado}
+
+Após o desbloqueio com a senha correta, entramos pelo console serial com a
+conta \texttt{ensaio}. Em \texttt{/proc/mounts}, a entrada de \texttt{/}
+mostrou que o dispositivo \texttt{/dev/mapper/t4root} fornecia a raiz ext4.
+O arquivo de versão identificou o LFS 8.3
+e \texttt{uname} retornou o kernel \texttt{7.3.5-arch1-1}. A leitura do
+byte de dados da variável EFI \texttt{SecureBoot}, após os quatro bytes de
+atributos, retornou 1 (Figura~\ref{fig:linux}).
+
+\begin{figure}[H]
+  \centering
+  \caption{Versão do sistema, montagem da raiz e estado de Secure Boot no convidado}
+  \label{fig:linux}
+  \includegraphics[width=0.88\linewidth,trim=0 45bp 0 0,clip]{figuras/ensaio-linux.png}
+\end{figure}
+
+O teste de integração \texttt{tests/luks\_vm.py} repetiu os três cenários em
+uma cópia temporária do disco e das variáveis do firmware. A variável de shell
+\texttt{VM} na Figura~\ref{fig:testes} aponta para o diretório da VM de ensaio.
+
+\begin{figure}[H]
+  \centering
+  \caption{Resultado dos testes unitários e dos três cenários de integração}
+  \label{fig:testes}
+  \includegraphics[width=0.93\linewidth,trim=0 45bp 0 0,clip]{figuras/ensaio-testes.png}
+\end{figure}
+
+\section{Conclusão}
+
+O comentário acrescentado ao kernel bastou para interromper a cadeia simulada.
+Na VM, a retirada da assinatura interrompeu o boot no OVMF, enquanto a senha
+incorreta o interrompeu depois, durante a abertura do disco. Com a imagem
+assinada e a senha correta, o Linux montou a raiz cifrada e abriu uma sessão de
+usuário. A assinatura verificada abrange a imagem EFI. A integridade individual
+dos arquivos do ext4 e a revogação de chaves ficam fora destes ensaios.
+
+\postextual
+\bibliography{referencias}
+\end{document}

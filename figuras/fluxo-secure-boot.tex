@@ -1,0 +1,32 @@
+\begin{tikzpicture}[
+  font=\sffamily\small,
+  etapa/.style={draw=blue!20!gray!50, fill=blue!7, text=blue!45!black,
+    rounded corners=3mm, align=center, minimum height=1.25cm,
+    inner xsep=5mm, font=\sffamily\small\bfseries},
+  decisao/.style={etapa, fill=blue!3, dashed},
+  resposta/.style={etapa, fill=blue!3, minimum height=5mm,
+    inner sep=2pt, font=\sffamily\footnotesize},
+  seta/.style={-{Stealth[length=2mm]}, draw=black!55, rounded corners=2mm}
+]
+  \node[etapa] (raiz) at (0,0) {Chave pública raiz confiável};
+  \node[etapa] (verificaBootloader) at (0,-2.2)
+    {Verificar assinatura e\\integridade do bootloader};
+  \node[decisao] (bootloaderValido) at (0,-4.4) {Bootloader válido?};
+  \node[etapa] (verificaKernel) at (0.8,-7.2)
+    {Validar chave do bootloader\\e verificar o kernel};
+  \node[decisao] (kernelValido) at (0.8,-9.4) {Chave e kernel válidos?};
+  \node[etapa] (bloqueado) at (-3.4,-12.4) {Boot bloqueado};
+  \node[etapa] (autorizado) at (1.6,-12.4) {Boot autorizado};
+
+  \draw[seta] (raiz) -- (verificaBootloader);
+  \draw[seta] (verificaBootloader) -- (bootloaderValido);
+  \draw[seta] ([xshift=8mm]bootloaderValido.south) --
+    node[resposta] {Sim} (verificaKernel.north);
+  \draw[seta] ([xshift=-8mm]bootloaderValido.south) -- ++(0,-0.4)
+    -| node[resposta,pos=0.7] {Não} ([xshift=-5mm]bloqueado.north);
+  \draw[seta] (verificaKernel) -- (kernelValido);
+  \draw[seta] ([xshift=-8mm]kernelValido.south) -- ++(0,-0.4)
+    -| node[resposta,pos=0.74] {Não} ([xshift=5mm]bloqueado.north);
+  \draw[seta] ([xshift=8mm]kernelValido.south) --
+    node[resposta] {Sim} (autorizado.north);
+\end{tikzpicture}
