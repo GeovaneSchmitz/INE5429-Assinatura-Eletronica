@@ -113,47 +113,33 @@ mesmo manifesto podem diferir~\cite{rfc8017}.
 
 \section{Processo de verificação de assinaturas}
 
-A verificação confirma se a assinatura corresponde ao conteúdo recebido.
-O firmware também consulta as bases de confiança para decidir se o signatário
-tem autorização para assinar aquele componente~\cite{uefi}.
+No simulador, o manifesto do kernel registra o SHA-256 esperado para esse
+arquivo. Primeiro, o verificador usa a chave pública autorizada para conferir
+a assinatura do manifesto. Em seguida, calcula o SHA-256 dos bytes do kernel
+recebido e compara o resultado com o valor registrado. Se os dois resumos
+coincidem, o verificador aceita o kernel descrito no manifesto autenticado.
+
+Na VM, o firmware verifica a assinatura da imagem EFI e consulta suas bases de
+confiança para decidir se pode executar a imagem~\cite{uefi}.
 
 \section{Gerenciamento e revogação de chaves}
 
-A chave de plataforma (PK) estabelece o controle da plataforma. As chaves KEK
-autorizam atualizações das bases de confiança. A base \texttt{db} contém
-certificados e hashes autorizados, e a \texttt{dbx} registra os proibidos. Uma
+No Secure Boot UEFI, a chave de plataforma (PK) permite ao proprietário definir
+quais chaves de troca (KEK) podem autorizar atualizações das bases de confiança.
+A base \texttt{db} contém certificados e hashes autorizados, e a \texttt{dbx}
+registra os proibidos. Uma
 atualização autenticada pode revogar uma imagem vulnerável ou um certificado
 cuja chave privada foi comprometida~\cite{uefi}.
 
 \section{O que muda quando o kernel é editado?}
 \label{sec:exemplo-kernel}
 
-O comando \texttt{init} gera um kernel Python de uma linha. Seu manifesto
-contém o registro assinado abaixo, exibido com quebras de linha para leitura.
-O simulador assina o JSON com as chaves ordenadas e sem espaços.
-
-{\footnotesize
-\begin{verbatim}
-{"role":"kernel",
- "sha256":"d5886c53506d86cce7c863c82e15512116ff3fc6d20675c01b97d05e9645d79d",
- "version":1}
-\end{verbatim}
-}
-
-No primeiro boot, o SHA-256 calculado sobre \texttt{kernel.py} coincide com
-o do registro e o kernel executa (código 0). Acrescentar a linha
-\texttt{\# alteração de teste} em UTF-8, com uma quebra de linha ao final,
-produz o resumo abaixo.
-
-{\footnotesize
-\begin{verbatim}
-dd50356750c1ab441904e51fdfeac1dd72d62406322983e31012217d7d133f28
-\end{verbatim}
-}
-
-A assinatura do manifesto continua válida porque seus campos permanecem
-idênticos. Ao comparar os dois resumos, o verificador identifica a alteração
-nos bytes do kernel e encerra o boot com código 1.
+No simulador, um pequeno programa em Python representa o kernel. Acrescentar
+um comentário ao programa preserva seu comportamento, mas altera os bytes do
+arquivo. Como a edição afeta apenas o programa, a assinatura do manifesto
+continua válida. Ao recalcular o SHA-256 do programa editado, o verificador
+encontra um valor diferente do registrado no manifesto e bloqueia a execução.
+A seção~\ref{sec:integridade-simulador} mostra o resultado antes e depois da edição.
 
 \chapter{Simulação do Secure Boot}
 
@@ -180,6 +166,7 @@ entrega ao interpretador Python os mesmos bytes que acabaram de ser verificados.
 \chapter{Execução e resultados}
 
 \section{Integridade do kernel no simulador}
+\label{sec:integridade-simulador}
 
 As capturas das Figuras~\ref{fig:simulador} a~\ref{fig:linux} foram feitas
 em 23 de novembro de 2026, com a revisão
@@ -198,10 +185,11 @@ bootloader e os mesmos manifestos nas duas execuções.
 
 Na primeira execução, o verificador autenticou o bootloader, a chave delegada e
 o kernel. A mensagem emitida pelo próprio kernel e o código de saída 0
-confirmaram a execução. Em seguida, acrescentamos um comentário ao arquivo
-\texttt{kernel.py}. Embora o comentário preserve o comportamento do programa,
-ele altera os bytes e, portanto, o resumo SHA-256. Na segunda execução, o
-verificador registrou \texttt{Kernel adulterado} e devolveu o código 1.
+confirmaram a execução. Em seguida, acrescentamos a linha
+\texttt{\# alteração de teste} ao arquivo \texttt{kernel.py}, em UTF-8 e com
+uma quebra de linha ao final. O prefixo do SHA-256 passou de \texttt{d5886c53}
+para \texttt{dd503567}. Na segunda execução, o verificador registrou
+\texttt{Kernel adulterado} e devolveu o código 1.
 A Figura~\ref{fig:simulador} mostra as duas chamadas com os mesmos argumentos.
 
 Os 11 testes de \texttt{tests/test\_secure\_boot.py} passaram. A suíte exercitou,
